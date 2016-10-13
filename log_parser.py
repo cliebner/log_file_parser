@@ -66,67 +66,104 @@ import pandas as pd
 class abstractTimeLogReader(object):
     def __init__(self, filename):
         self.TIMELOG_FILENAME = filename
+        self.TIME_FORMAT = ''
+        self.TIME_COL = 0
+        self.SEPARATOR = ''
+        self.NUM_COL = 0
+        self.COL_NAMES = []  # order matters!
+        self.COL_TYPES = {}  # look up value type for each column
         self.timelog_lines = []
 
         with open(filename, 'r', 0) as f:
             self.timelog_lines = f.read().splitlines()
-        # f = open(self.TIMELOG_FILENAME, 'r', 0)
-        #
-        # # remove blank lines
-        # for line in f:
-        #     if len(line.strip()) > 0:
-        #         self.timelog_lines.append(line.strip())
-        # f.close()
+
+    def abstractTimeLogCleaner(self):
+        # make placeholder lists, to be converted to dataframe later (there has to be a faster way!!)
+        i = 0
+        a_dict = {n: [] for n in self.COL_NAMES}
+        a_dict['line_num'] = []
+
+        for line in self.timelog_lines:
+            if line.count(self.SEPARATOR) >= (self.NUM_COL - 1):
+                a_dict['line_num'].append(i)
+                for j in range(len(self.COL_NAMES)-1):  # last column does not need to be partitioned - this is to hedge against separator being used in the last column
+                    keep, sep, line = line.partition(self.SEPARATOR)
+                    a_dict[self.COL_NAMES[j]].append(keep)
+                a_dict[self.COL_NAMES[j+1]].append(line)
+
+                i += 1
+
+            # line is not empty, not the first line, and wrapped from prev line
+            elif len(line.split(self.SEPARATOR)) == 1 and i > 0:
+                a_dict[self.COL_NAMES[-1]][i - 1] += line  # TODO: make sure types are the same! (should be str)
+            else:
+                pass
+
+        for c in self.COL_NAMES:
+            # TODO: implement MORE ELEGANT type forcing from column_type_dict
+            if self.COL_TYPES[c] == 0:
+                a_dict[c] = [int(x) for x in a_dict[c]]
+            elif self.COL_TYPES[c] == 1:
+                a_dict[c] = [float(x) for x in a_dict[c]]
+            elif self.COL_TYPES[c] == 2:
+                a_dict[c] = [str(x).upper() for x in a_dict[c]]
+            elif self.COL_TYPES[c] == 3:
+                a_dict[c] = [dt.datetime.strptime(x, self.TIME_FORMAT) for x in a_dict[c]]
+            else:
+                pass
+        return pd.DataFrame(a_dict)
+
+
+
+    def abstractPlotHistory(self, time_vec, value_vec):
+        plt.plot(time_vec, value_vec, 'b.-')
+
+    def abstractDateTimeFixer(self):
+        # apply user-defined date time fixer method to the lines in the read-in file
+        pass
+
+    def abstractBucket(self):
+        # do in a loop based on user input?
+        # newBucketClass = bucketClassFactory()
+        pass
+
+    def bucketFactory(self):
+        # make buckets based on user's rules! in a json perhaps??
+        pass
 
 
 class TCX_TimeLogReader(abstractTimeLogReader):
     # TCX_specific methods, or TCX-specific tweaks to methods in abstract
     def __init__(self, filename):
         super(TCX_TimeLogReader, self).__init__(filename)
+        self.filename = filename
         self.TIME_FORMAT = '%H:%M:%S'
         self.DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
-        self.clean_df = self.clean_TCX_lines()
 
-    def clean_TCX_lines(self):
+        self.SEPARATOR = '-'
+        self.NUM_COL = 3
+        self.COL_NAMES = ['session_num', 'time', 'msg']  # order matters!
+        self.COL_TYPES = dict(zip(self.COL_NAMES, [0, 3, 2]))
 
-        # make placeholder lists, to be converted to dataframe later (there has to be a faster way!!)
-        i = 0
-        line_num = []
-        session_num = []
-        time = []
-        msg = []
-        for line in self.timelog_lines:
-            if line.count('-') >= 2:
-                line_num.append(i)
-                session_num.append(line.partition('-')[0])
-                time.append(line.partition('-')[2].partition('-')[0])
-                msg.append(line.partition('-')[2].partition('-')[2])
-                i += 1
-            elif len(line.split('-')) == 1 and i > 0:  # line is not empty, not the first line, and wrapped from prev line
-                msg[i-1] += line
-            else:
-                pass
+        self.clean_df = self.abstractTimeLogCleaner()
 
-        # make pandas dataframe with columns: line #, log session #, time, msg
-        return pd.DataFrame({'line_num': pd.Series(line_num),
-                             'session_num': pd.Series(session_num),
-                             'time': pd.Series(time),
-                             'msg': pd.Series(msg)})
+    def plot_session_history(self):
+        self.abstractPlotHistory(self.clean_df['time'], self.clean_df['session_num'])
+        plt.title(self.filename)
+
+    def find_keyword(self, keyword, column_name):
+        return self.clean_df[[keyword.upper() in x for x in self.clean_df[column_name]]]
+
+    def get_spc_list(self):
+        all_spcs_msg = self.find_keyword('SPC', 'msg').loc[:,'msg']
+        spc_list = [x.partition('SPC')[2] for x in all_spcs_msg]
+        spc_list_2 = ['SPC'+x[:13] for x in spc_list]
+
+        # todo: watch out for messages that list the number of SPCs loaded
+        return list(set(spc_list_2))
 
 
-
-def abstractDateTimeFixer(object):
-    # apply user-defined date time fixer method to the lines in the read-in file
-    pass
-
-class abstractBucket(object):
-    # do in a loop based on user input?
-    # newBucketClass = bucketClassFactory()
-    pass
-
-def bucketFactory(object):
-    # make buckets based on user's rules! in a json perhaps??
-    pass
 
 filename = 'TrackerCx_brian_2016-10-03.log'
 briantest = TCX_TimeLogReader(filename)
+brian_spcs = briantest.get_spc_list()
