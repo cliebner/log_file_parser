@@ -115,8 +115,9 @@ class abstractTimeLogReader(object):
 
 
 
-    def abstractPlotHistory(self, time_vec, value_vec):
-        plt.plot(time_vec, value_vec, 'b.-')
+    def abstractPlotHistory(self, time_vec, value_vec, color='None'):
+        plt.plot(time_vec, value_vec, color, mec='None')
+        plt.title(self.TIMELOG_FILENAME)
 
     def abstractDateTimeFixer(self):
         # apply user-defined date time fixer method to the lines in the read-in file
@@ -138,6 +139,8 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         super(TCX_TimeLogReader, self).__init__(filename)
         self.filename = filename
         self.TIME_FORMAT = '%H:%M:%S'
+        self.TIME_ZERO = dt.datetime.strptime('0:0:0', self.TIME_FORMAT)
+        self.DATE_FORMAT = '%m/%d/%Y'
         self.DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 
         self.SEPARATOR = '-'
@@ -145,25 +148,66 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         self.COL_NAMES = ['session_num', 'time', 'msg']  # order matters!
         self.COL_TYPES = dict(zip(self.COL_NAMES, [0, 3, 2]))
 
+        self.START_STR = ': begin()'.upper()
+        self.COMPLETE_STR = ': complete called'.upper()
+
+        self.TASK_PUSHPARAMS = 'PushParamsHopefullyFaster'.upper()
+        self.TASK_DISCOVER = 'DiscoverTaskNew'.upper()
+
         self.clean_df = self.abstractTimeLogCleaner()
 
     def plot_session_history(self):
-        self.abstractPlotHistory(self.clean_df['time'], self.clean_df['session_num'])
+        self.abstractPlotHistory(self.clean_df['time'], self.clean_df['session_num'], color='k')
+
+    def plot_keyword_history(self, keyword, marker_format):
+        keyword_df = self.find_keyword(keyword, 'msg')
+        self.abstractPlotHistory(keyword_df['time'], keyword_df['session_num'], marker_format)
         plt.title(self.filename)
 
     def find_keyword(self, keyword, column_name):
         return self.clean_df[[keyword.upper() in x for x in self.clean_df[column_name]]]
 
     def get_spc_list(self):
-        all_spcs_msg = self.find_keyword('SPC', 'msg').loc[:,'msg']
-        spc_list = [x.partition('SPC')[2] for x in all_spcs_msg]
-        spc_list_2 = ['SPC'+x[:13] for x in spc_list]
+        all_spcs_msg = self.find_keyword('SPC', 'msg').loc[:, 'msg']
+        spc_list = ['SPC'+x.partition('SPC')[2][:13] for x in all_spcs_msg]
 
         # todo: watch out for messages that list the number of SPCs loaded
-        return list(set(spc_list_2))
+        return list(set(spc_list))
+
+    def get_ncu_list(self):
+        # get unique list of ip addresses connected to during session
+        all_ncus = self.find_keyword('v,0', 'msg').loc[:, 'msg']
+        ncu_list = [x.partition('RECEIVED FROM ')[2].partition(':V,0')[0] for x in all_ncus]
+        return list(set(ncu_list))
+
+    def get_bc_commands(self):
+        # get unique list of broadcast commands sent during session
+        all_bc = self.find_keyword('0000FFFF,', 'msg').loc[:, 'msg']
+        bc_list = [x.partition('0000FFFF,')[2] for x in all_bc]
+
+        #todo: figure out which command means what
+
+        return list(set(bc_list))
+
+    def fix_date(self):
+        new_start = self.clean_df[self.clean_df['session_num'] == 0]
+        date_list = [dt.datetime.strptime(x.partition('STARTING... ')[2], '%m/%d/%Y') for x in new_start['msg']]
+        # before the first start instance:
+        end = new_start.index[0]-1
+
+        # between each start:
+        # after the last start:
+
+    def collate_messages(self):
+        # find all received msgs that have the format: command, destination, source, information
+        # include time stamp
+        # package as dataframe
+        # can then slice dataframe in interesting ways, i.e. unique destinations, all inf from one destination, etc.
+        pass
+
 
 
 
 filename = 'TrackerCx_brian_2016-10-03.log'
 briantest = TCX_TimeLogReader(filename)
-brian_spcs = briantest.get_spc_list()
+brian_spcs = briantest.get_ncu_list()
