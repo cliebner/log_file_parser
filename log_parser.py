@@ -69,20 +69,23 @@ class abstractTimeLogReader(object):
         self.TIMELOG_FILENAME = filename
         self.TIME_FORMAT = ''
         self.TIME_COL = 0
-        self.SEPARATOR = ''
+        self.TIME_SEPARATOR = ''
+        self.DATE_SEPARATOR = ''
+        self.COL_SEPARATOR = ''
         self.NUM_COL = 0
         self.COL_NAMES = []  # order matters!
         self.COL_TYPES = {}  # look up value type for each column
         self.timelog_lines = []
         self.LINE_NUM = 'line_num'
 
-        # start = time.clock()
-
         with open(filename, 'r', 0) as f:
             self.timelog_lines = f.read().splitlines()
-        # think about pickling, save as cpickle
-        # end = time.clock()
-        # print (end - start)
+
+        # todo: all plots in same object on same axes, but new object creates new plot
+        self.LEGEND = []
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111)
+        self.fig.suptitle(self.TIMELOG_FILENAME)
 
     def abstractTimeLogCleaner(self):
         # make placeholder lists, to be converted to dataframe later (there has to be a faster way!!)
@@ -93,17 +96,21 @@ class abstractTimeLogReader(object):
         start = time.clock()
         for line in self.timelog_lines:
             line = line.strip('\x00').strip()
-            if line.count(self.SEPARATOR) >= (self.NUM_COL - 1):
+            if line.count(self.COL_SEPARATOR) >= (len(self.COL_NAMES) - 1) \
+                    and line.count(self.TIME_SEPARATOR) >= self.TIME_FORMAT.count(self.TIME_SEPARATOR):
                 a_dict[self.LINE_NUM].append(i)
-                for j in range(len(self.COL_NAMES)-1):  # last column does not need to be partitioned - this is to hedge against separator being used in the last column
-                    keep, sep, line = line.partition(self.SEPARATOR)
+                for j in range(len(self.COL_NAMES)-1):
+                    # -1 because last column does not need to be partitioned -
+                    # this is to hedge against the column separator being used in the last column
+                    keep, sep, line = line.partition(self.COL_SEPARATOR)
                     a_dict[self.COL_NAMES[j]].append(keep)
                 a_dict[self.COL_NAMES[j+1]].append(line)
 
                 i += 1
 
-            # line is not empty, not the first line, and wrapped from prev line
-            elif len(line.split(self.SEPARATOR)) == 1 and i > 0:
+            # if line does not have a time value, does not have enough column separators, and is not the first line,
+            # then it is wrapped from prev line
+            elif i > 0:
                 a_dict[self.COL_NAMES[-1]][i - 1] += line  # TODO: make sure types are the same! (should be str)
             else:
                 pass
@@ -115,42 +122,24 @@ class abstractTimeLogReader(object):
             # time.clock shows that list comprehension method is slightly faster than pandas.apply method
             # time.clock also shows that converting to python timestamp takes the most time
             if self.COL_TYPES[c] == 0:
-                # start = time.clock()
                 a_dict[c] = [int(x) for x in a_dict[c]]
-                # end = time.clock()
-                # print ('int: ' + str(end - start))
 
             elif self.COL_TYPES[c] == 1:
-                # start = time.clock()
                 a_dict[c] = [float(x) for x in a_dict[c]]
-                # end = time.clock()
-                # print ('float: ' + str(end - start))
 
             elif self.COL_TYPES[c] == 2:
-                # start = time.clock()
                 a_dict[c] = [str(x).upper() for x in a_dict[c]]
-                # end = time.clock()
-                # print ('str: ' + str(end - start))
 
             elif self.COL_TYPES[c] == 3:
-                # start = time.clock()
                 a_dict[c] = [dt.datetime.strptime(x, self.TIME_FORMAT) for x in a_dict[c]]
-                # end = time.clock()
-                # print ('timestamp: ' + str(end - start))
 
             else:
                 pass
 
         return pd.DataFrame(a_dict)
 
-
     def abstractPlotHistory(self, time_vec, value_vec, color='None'):
-        plt.plot(time_vec, value_vec, color, mec='None')
-        plt.title(self.TIMELOG_FILENAME)
-
-    def abstractDateTimeFixer(self):
-        # apply user-defined date time fixer method to the lines in the read-in file
-        pass
+        self.ax.plot(time_vec, value_vec, color, mec='None')
 
     def abstractBucket(self):
         # do in a loop based on user input?
@@ -169,10 +158,12 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         self.filename = filename
         self.TIME_FORMAT = '%H:%M:%S'
         self.TIME_ZERO = dt.datetime.strptime('0:0:0', self.TIME_FORMAT)
+        self.TIME_SEPARATOR = ':'
+        self.DATE_SEPARATOR = '/'
         self.DATE_FORMAT = '%m/%d/%Y'
         self.DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 
-        self.SEPARATOR = '-'
+        self.COL_SEPARATOR = '-'
         self.NUM_COL = 3
         self.COL_NAMES = ['session_num', 'time', 'msg']  # order matters!
         self.COL_TYPES = dict(zip(self.COL_NAMES, [0, 3, 2]))
@@ -186,29 +177,38 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         self.DISCONNECTED = 'send: not connected'
         self.DISCOVERED_RESPONSE = ':9,'
         self.SCANNED = 'Scan received'
-        self.FW_UPGRADE = ':d,'
+        self.FW_UPGRADE = 'update sesh data = d,'
+        self.MONITOR_RESPONSE = '00000317'
 
         self.TASK_PUSHPARAMS = 'PushParamsHopefullyFaster'
         self.TASK_DISCOVER = 'DiscoverTaskNew'
         self.TASK_GET_NCU = 'GetNCUConfigTask'
         self.TASK_CONFIG_NCU = 'NCUConfigureTask'
+        self.TASK_PAN_BC = 'pan broadcast'
 
         self.is_single_session = False
         self.is_valid_clock = False
 
         self.clean_df = self.abstractTimeLogCleaner()
         self.fix_datetime()
+        print('done cleaning')
 
-        print('done')
+        self.plot_session_history()
 
     def plot_session_history(self):
-        self.abstractPlotHistory(self.clean_df['datetime'], self.clean_df['session_num'], color='k')
+        self.abstractPlotHistory(self.clean_df['datetime'], self.clean_df['session_num'],
+                                 color='k-')
+        self.LEGEND += ['session_num']
+        plt.legend(self.LEGEND, loc='best')
         self.plot_ncu_connection()
 
     def plot_keyword_history(self, keyword, marker_format):
         keyword_df = self.find_keyword(keyword, 'msg')
         self.abstractPlotHistory(keyword_df['datetime'], keyword_df['session_num'], marker_format)
-        plt.title(self.filename)
+        handles, labels = self.ax.get_legend_handles_labels()
+        print handles, labels
+        # self.LEGEND += [keyword]
+        # plt.legend(self.LEGEND, loc='best')
 
     def find_keyword(self, keyword, column_name):
         return self.clean_df[[keyword.upper() in x for x in self.clean_df[column_name]]]
@@ -222,19 +222,20 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
     def get_ncu_connections(self):
         # get ncu connections in order that they occurred, and associated datetimes
+        # todo: need to handle multiple TCX windows open connected to multiple NCUs at once
 
         all_ncus = self.find_keyword('v,0', 'msg')
         ncu_list = [x.partition('RECEIVED FROM ')[2].partition(':V,0')[0] for x in all_ncus.loc[:, 'msg']]
-        all_ncus['ip'] = ncu_list
+        all_ncus.loc[:, 'ip'] = pd.Series(ncu_list, index=all_ncus.index)
 
-        is_switch = [True]
+        is_new_connection = [True]
         for n in range(1, len(ncu_list)):
             if ncu_list[n] != ncu_list[n-1]:
-                is_switch.append(True)
+                is_new_connection.append(True)
             else:
-                is_switch.append(False)
+                is_new_connection.append(False)
 
-        return all_ncus[is_switch]
+        return all_ncus[is_new_connection]
 
     def get_ncu_list(self):
         ncu_df = self.get_ncu_connections()
@@ -242,19 +243,20 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
     def plot_ncu_connection(self):
         ncu_connections_df = self.get_ncu_connections()
-        cols = ncu_connections_df.columns
-        time_index = cols.index()
-        for n in ncu_connections_df.itertuples():
 
-            # todo: what if user goes back to an ncu? need to catch changes in ip address, not just first instance
-            text_label_x = ncu_session.loc[ncu_session.index[0], 'datetime']
-            text_label_y = ncu_session.loc[ncu_session.index[0], 'session_num']
-            plt.text(text_label_x, text_label_y + 1000, n,
+        for n in ncu_connections_df.index:
+
+            text_label_x = ncu_connections_df.loc[n, 'datetime']
+            text_label_y = ncu_connections_df.loc[n, 'session_num']
+            self.ax.text(text_label_x, text_label_y + 1000, ncu_connections_df.loc[n, 'ip'],
                      fontsize=8, rotation='vertical',
                      horizontalalignment='center', verticalalignment='bottom')  # vertical offset for visual clarity
-            plt.plot(text_label_x, text_label_y,
+            self.ax.plot(text_label_x, text_label_y,
                      marker='d', mec='k', color='None')
-
+        self.LEGEND += ['ip']
+        handles, labels = self.ax.get_legend_handles_labels()
+        print handles, labels
+        # self.ax.legend(handles, labels)
 
     def get_bc_commands(self):
         # get unique list of broadcast commands sent during session
@@ -272,28 +274,49 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
         if len(new_session) > 0:  # multiple sessions (could be same day or many days)
             date_list = [dt.datetime.strptime(x.partition('STARTING... ')[2], '%m/%d/%Y') for x in new_session['msg']]
-
-            for i in range(len(date_list) + 1):
-                if i == 0:  # start
-                    start_ix = 0
-                    end_ix = new_session.index[0] - 1
-
-                    # is previous session likely same day (time t-1 <= time t) or previous day (time t-1 > time t)?
-                    if self.clean_df.ix[end_ix, 'time'] > new_session.ix[end_ix+1, 'time']:
-                        date = date_list[0] - dt.timedelta(1)
-                    else:
-                        date = date_list[0]
-                elif i == len(date_list):  # end
-                    start_ix = new_session.index[i - 1]
-                    end_ix = self.clean_df.index[-1]
-                    date = date_list[i - 1]
-                else:  # middle
-                    start_ix = new_session.index[i - 1]
-                    end_ix = new_session.index[i] - 1
-                    date = date_list[i - 1]
-
+            start_ix = new_session.index[0]
+            # if first date instance is not found at beginning of file, backfill before first new_session:
+            if start_ix > 0:
+                start_ix = 0
+                end_ix = new_session.index[0] - 1
+                # is previous session likely same day (time t-1 <= time t) or previous day (time t-1 > time t)?
+                if self.clean_df.ix[end_ix, 'time'] > new_session.ix[end_ix + 1, 'time']:
+                    date = date_list[0] - dt.timedelta(1)
+                else:
+                    date = date_list[0]
                 new_datetime.extend(
                     [date + (x - self.TIME_ZERO) for x in self.clean_df.ix[start_ix:end_ix, 'time']])
+
+            for i in range(len(date_list)):
+                start_ix = new_session.index[i]
+                try:
+                    end_ix = new_session.index[i+1] - 1  # bc pandas df slicing is inclusive of endpoint
+                except IndexError:
+                    end_ix = self.clean_df.index[-1]
+
+                new_datetime.extend(
+                    [date_list[i] + (x - self.TIME_ZERO) for x in self.clean_df.ix[start_ix:end_ix, 'time']])
+
+                # if i == 0:  # start
+                #     start_ix = 0
+                #     end_ix = new_session.index[0] - 1
+                #     print (str(start_ix) + ',' + str(end_ix))
+                #
+                #     # is previous session likely same day (time t-1 <= time t) or previous day (time t-1 > time t)?
+                #     if self.clean_df.ix[end_ix, 'time'] > new_session.ix[end_ix+1, 'time']:
+                #         date = date_list[0] - dt.timedelta(1)
+                #     else:
+                #         date = date_list[0]
+                # elif i == len(date_list):  # end
+                #     start_ix = new_session.index[i - 1]
+                #     end_ix = self.clean_df.index[-1]
+                #     date = date_list[i - 1]
+                # else:  # middle
+                #     start_ix = new_session.index[i - 1]
+                #     end_ix = new_session.index[i] - 1
+                #     date = date_list[i - 1]
+
+
 
         else:  # single session -- need to infer date from NCU clock
             self.is_single_session = True
@@ -326,7 +349,6 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
 
 
-# filename = 'TrackerCx_jc_2016-10-17.log'
+# filename = 'test_r.log'
 # test = TCX_TimeLogReader(filename)
 # test.plot_session_history()
-# test.plot_ncu_list()
