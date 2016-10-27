@@ -82,7 +82,7 @@ class abstractTimeLogReader(object):
             self.timelog_lines = f.read().splitlines()
 
         # todo: all plots in same object on same axes, but new object creates new plot
-        self.LEGEND = []
+        self.LEGEND_LABELS = []
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111)
         self.fig.suptitle(self.TIMELOG_FILENAME)
@@ -122,10 +122,24 @@ class abstractTimeLogReader(object):
             # time.clock shows that list comprehension method is slightly faster than pandas.apply method
             # time.clock also shows that converting to python timestamp takes the most time
             if self.COL_TYPES[c] == 0:
-                a_dict[c] = [int(x) for x in a_dict[c]]
+                ints = []
+                for x in a_dict[c]:
+                    try:
+                        ints.append(int(x))
+                    except ValueError:
+                        ints.append(float('nan'))
+                a_dict[c] = ints
+                # a_dict[c] = [int(x) for x in a_dict[c]]
 
             elif self.COL_TYPES[c] == 1:
-                a_dict[c] = [float(x) for x in a_dict[c]]
+                floats = []
+                for x in a_dict[c]:
+                    try:
+                        floats.append(float(x))
+                    except ValueError:
+                        floats.append(float('nan'))
+                a_dict[c] = floats
+                # a_dict[c] = [float(x) for x in a_dict[c]]
 
             elif self.COL_TYPES[c] == 2:
                 a_dict[c] = [str(x).upper() for x in a_dict[c]]
@@ -137,6 +151,7 @@ class abstractTimeLogReader(object):
                 pass
 
         return pd.DataFrame(a_dict)
+
 
     def abstractPlotHistory(self, time_vec, value_vec, color='None'):
         self.ax.plot(time_vec, value_vec, color, mec='None')
@@ -171,7 +186,9 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         self.START_STR = ': begin()'
         self.COMPLETE_STR = ': complete called'
         self.SHUTDOWN_STR = ': shutdown requested'
-        self.CLOCK = 'z,ct='
+        self.NCU_CLOCK = 'z,ct='
+        self.XBEE_CLOCK = 'z,xt='
+        self.XBEE_RESET = 'z,xt=0'
         self.INVALID_CLOCK = ':z,ct=2000/00/00'
         self.DEFAULT_PAN = ':z,pan=8888'
         self.DISCONNECTED = 'send: not connected'
@@ -198,17 +215,17 @@ class TCX_TimeLogReader(abstractTimeLogReader):
     def plot_session_history(self):
         self.abstractPlotHistory(self.clean_df['datetime'], self.clean_df['session_num'],
                                  color='k-')
-        self.LEGEND += ['session_num']
-        plt.legend(self.LEGEND, loc='best')
+        self.LEGEND_LABELS += ['session_num']
+        # plt.legend(self.LEGEND, loc='best')
         self.plot_ncu_connection()
 
     def plot_keyword_history(self, keyword, marker_format):
         keyword_df = self.find_keyword(keyword, 'msg')
         self.abstractPlotHistory(keyword_df['datetime'], keyword_df['session_num'], marker_format)
-        handles, labels = self.ax.get_legend_handles_labels()
-        print handles, labels
-        # self.LEGEND += [keyword]
-        # plt.legend(self.LEGEND, loc='best')
+        # handles, labels = self.ax.get_legend_handles_labels()
+        # print handles, labels
+        self.LEGEND_LABELS += [keyword]
+        plt.legend(self.LEGEND_LABELS, loc='best')
 
     def find_keyword(self, keyword, column_name):
         return self.clean_df[[keyword.upper() in x for x in self.clean_df[column_name]]]
@@ -253,9 +270,9 @@ class TCX_TimeLogReader(abstractTimeLogReader):
                      horizontalalignment='center', verticalalignment='bottom')  # vertical offset for visual clarity
             self.ax.plot(text_label_x, text_label_y,
                      marker='d', mec='k', color='None')
-        self.LEGEND += ['ip']
-        handles, labels = self.ax.get_legend_handles_labels()
-        print handles, labels
+        self.LEGEND_LABELS += ['ip']
+        # handles, labels = self.ax.get_legend_handles_labels()
+        # print handles, labels
         # self.ax.legend(handles, labels)
 
     def get_bc_commands(self):
@@ -316,15 +333,13 @@ class TCX_TimeLogReader(abstractTimeLogReader):
                 #     end_ix = new_session.index[i] - 1
                 #     date = date_list[i - 1]
 
-
-
         else:  # single session -- need to infer date from NCU clock
             self.is_single_session = True
-            clock_times = self.find_keyword(self.CLOCK, 'msg')
+            clock_times = self.find_keyword(self.NCU_CLOCK, 'msg')
             valid_clock = clock_times[[self.INVALID_CLOCK not in x for x in clock_times['msg']]]
             if len(valid_clock) > 0:
                 self.is_valid_clock = True
-                date_str = valid_clock.loc[valid_clock.index[0], 'msg'].partition(self.CLOCK.upper())[2].split('/')
+                date_str = valid_clock.loc[valid_clock.index[0], 'msg'].partition(self.NCU_CLOCK.upper())[2].split('/')
                 date = dt.datetime(int(date_str[0]), int(date_str[1]), int(date_str[2]))
                 new_datetime = [date + (x - self.TIME_ZERO) for x in self.clean_df['time']]
             else:  # no valid clock available
@@ -349,6 +364,6 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
 
 
-# filename = 'test_r.log'
+# filename = 'TrackerCx_col_2016-10-25.log'
 # test = TCX_TimeLogReader(filename)
 # test.plot_session_history()
