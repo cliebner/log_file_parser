@@ -84,7 +84,7 @@ class abstractTimeLogReader(object):
         # todo: all plots in same object on same axes, but new object creates new plot
         self.LEGEND_LABELS = []
         self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111)
+        self.ax_list = [self.fig.add_subplot(111)]
         self.fig.suptitle(self.TIMELOG_FILENAME)
 
     def abstractTimeLogCleaner(self):
@@ -154,7 +154,7 @@ class abstractTimeLogReader(object):
 
 
     def abstractPlotHistory(self, time_vec, value_vec, color='None'):
-        self.ax.plot(time_vec, value_vec, color, mec='None')
+        self.ax_list.append(plt.plot(time_vec, value_vec, color, mec='None'))
 
     def abstractBucket(self):
         # do in a loop based on user input?
@@ -210,14 +210,33 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         self.fix_datetime()
         print('done cleaning')
 
-        self.plot_session_history()
+        # self.plot_session_history()
 
     def plot_session_history(self):
-        self.abstractPlotHistory(self.clean_df['datetime'], self.clean_df['session_num'],
-                                 color='k-')
-        self.LEGEND_LABELS += ['session_num']
+        # plot each IP session independently
+        ncu_conxn_df = self.get_ncu_connections()
+
+        for n in range(len(ncu_conxn_df.index)):
+            start = ncu_conxn_df.index[n]
+            if n == len(ncu_conxn_df.index) - 1:
+                end = ncu_conxn_df.index[-1]
+            else:
+                end = ncu_conxn_df.index[n + 1] - 1
+            self.abstractPlotHistory(self.clean_df.loc[start:end, 'datetime'],
+                                     self.clean_df.loc[start:end, 'session_num'], color='k-')
+
+            text_label_x = ncu_conxn_df.loc[start, 'datetime']
+            text_label_y = ncu_conxn_df.loc[start, 'session_num']
+            plt.text(text_label_x, text_label_y + 1000, ncu_conxn_df.loc[start, 'ip'],
+                              fontsize=8, rotation='vertical',
+                              horizontalalignment='center',
+                              verticalalignment='bottom')  # vertical offset for visual clarity
+            plt.plot(text_label_x, text_label_y,
+                              marker='d', mec='k', color='None')
+
+        # self.LEGEND_LABELS += ['session_num']
         # plt.legend(self.LEGEND, loc='best')
-        self.plot_ncu_connection()
+        # self.plot_ncu_connection()
 
     def plot_keyword_history(self, keyword, marker_format):
         keyword_df = self.find_keyword(keyword, 'msg')
@@ -240,23 +259,49 @@ class TCX_TimeLogReader(abstractTimeLogReader):
     def get_ncu_connections(self):
         # get ncu connections in order that they occurred, and associated datetimes
         # todo: need to handle multiple TCX windows open connected to multiple NCUs at once
-
+        # if new connection and < x seconds since last conxn, likely bc multiple windows w/ diff NCUs are open
+        # todo: what if multiple windows w/ same ncu?  that's ok, just looks ugly on plot
+        start = time.clock()
         all_ncus = self.find_keyword('v,0', 'msg')
         ncu_list = [x.partition('RECEIVED FROM ')[2].partition(':V,0')[0] for x in all_ncus.loc[:, 'msg']]
         all_ncus.loc[:, 'ip'] = pd.Series(ncu_list, index=all_ncus.index)
+        end = time.clock()
+        print 'find all ncu: ' + str(end - start)
 
-        is_new_connection = [True]
+        # check if message is to/from a different ip address than the previous message:
+        start = time.clock()
+        is_new_connection = [True]*len(all_ncus)
         for n in range(1, len(ncu_list)):
             if ncu_list[n] != ncu_list[n-1]:
-                is_new_connection.append(True)
+                is_new_connection[n] = True
             else:
-                is_new_connection.append(False)
+                is_new_connection[n] = False
+        conxn_df = all_ncus[is_new_connection]
+        end = time.clock()
+        print 'new conxn: ' + str(end - start)
 
-        return all_ncus[is_new_connection]
+        # sort to group by ip addresses
+        sorted_conxn_df = conxn_df.sort_values(['ip', 'line_num'])
+
+        # check if ip address is different, or that time betwn messages of from same ip address is long enough
+        # to merit a new conxn:
+        # TODO: OPTIMIZE!! THIS TAKES TOO LONG.  slow down is in iterating over the OR conditional
+        threshold = dt.timedelta(seconds=4)
+        start = time.clock()
+        is_distinct_conxn = [True] + [(sorted_conxn_df.iloc[s, :]['ip'] != sorted_conxn_df.iloc[s - 1, :]['ip']) or
+                                      (sorted_conxn_df.iloc[s, :]['datetime'] - sorted_conxn_df.iloc[s - 1, :]['datetime'] > threshold)
+                                              for s in range(1, len(sorted_conxn_df))]
+        end = time.clock()
+        print 'is_distinct: ' + str(end - start)
+        return sorted_conxn_df[is_distinct_conxn].sort_values('line_num')
 
     def get_ncu_list(self):
         ncu_df = self.get_ncu_connections()
         return list(set(ncu_df['ip']))
+
+    def split_by_ncu(self):
+        ncu_list = self.get_ncu_list()
+        return {n: self.find_keyword(n, 'msg') for n in ncu_list}
 
     def plot_ncu_connection(self):
         ncu_connections_df = self.get_ncu_connections()
@@ -265,11 +310,11 @@ class TCX_TimeLogReader(abstractTimeLogReader):
 
             text_label_x = ncu_connections_df.loc[n, 'datetime']
             text_label_y = ncu_connections_df.loc[n, 'session_num']
-            self.ax.text(text_label_x, text_label_y + 1000, ncu_connections_df.loc[n, 'ip'],
-                     fontsize=8, rotation='vertical',
-                     horizontalalignment='center', verticalalignment='bottom')  # vertical offset for visual clarity
-            self.ax.plot(text_label_x, text_label_y,
-                     marker='d', mec='k', color='None')
+            self.ax_list.text(text_label_x, text_label_y + 1000, ncu_connections_df.loc[n, 'ip'],
+                              fontsize=8, rotation='vertical',
+                              horizontalalignment='center', verticalalignment='bottom')  # vertical offset for visual clarity
+            self.ax_list.plot(text_label_x, text_label_y,
+                              marker='d', mec='k', color='None')
         self.LEGEND_LABELS += ['ip']
         # handles, labels = self.ax.get_legend_handles_labels()
         # print handles, labels
@@ -314,25 +359,6 @@ class TCX_TimeLogReader(abstractTimeLogReader):
                 new_datetime.extend(
                     [date_list[i] + (x - self.TIME_ZERO) for x in self.clean_df.ix[start_ix:end_ix, 'time']])
 
-                # if i == 0:  # start
-                #     start_ix = 0
-                #     end_ix = new_session.index[0] - 1
-                #     print (str(start_ix) + ',' + str(end_ix))
-                #
-                #     # is previous session likely same day (time t-1 <= time t) or previous day (time t-1 > time t)?
-                #     if self.clean_df.ix[end_ix, 'time'] > new_session.ix[end_ix+1, 'time']:
-                #         date = date_list[0] - dt.timedelta(1)
-                #     else:
-                #         date = date_list[0]
-                # elif i == len(date_list):  # end
-                #     start_ix = new_session.index[i - 1]
-                #     end_ix = self.clean_df.index[-1]
-                #     date = date_list[i - 1]
-                # else:  # middle
-                #     start_ix = new_session.index[i - 1]
-                #     end_ix = new_session.index[i] - 1
-                #     date = date_list[i - 1]
-
         else:  # single session -- need to infer date from NCU clock
             self.is_single_session = True
             clock_times = self.find_keyword(self.NCU_CLOCK, 'msg')
@@ -354,16 +380,14 @@ class TCX_TimeLogReader(abstractTimeLogReader):
         # can then slice dataframe in interesting ways, i.e. unique destinations, all inf from one destination, etc.
         pass
 
-    def plot_discovery(self):
-        # plot discovered time vs spc name for all SPCs (in session? per NCU?)
-        # interesting to see how discovery events cluster
-
-        # What "received" message do we get during DiscoveryTaskNew?
+    def get_discovery_rate(self):
+        # for each ncu_session, find start and end of discovery session,
+        # count number discovered,
+        # return average rate
         pass
 
 
 
-
-# filename = 'TrackerCx_col_2016-10-25.log'
+#
+# filename = 'TrackerCx_jc_2016-10-17.log'
 # test = TCX_TimeLogReader(filename)
-# test.plot_session_history()
